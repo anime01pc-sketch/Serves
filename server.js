@@ -27,7 +27,8 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.set('io', io);
 app.get('/api/health', (req, res) => res.json({ status: 'ok', mongodb: 'connected' }));
 
-require('./sockets/sessionSocket')(io);
+const { initSockets } = require('./sockets/sessionSocket');
+initSockets(io);
 
 connectDB().then(() => {
     const PORT = process.env.PORT || 3001;
