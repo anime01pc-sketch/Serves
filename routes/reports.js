@@ -1,77 +1,130 @@
 const express = require('express');
 const router = express.Router();
-const { authenticate } = require('../middleware/auth');
-const { dbAll, dbGet } = require('../utils/helpers');
-const logger = require('../utils/logger');
+const Session = require('../models/Session');
+const PC = require('../models/PC');
+const Payment = require('../models/Payment');
 
-router.get('/daily', authenticate, async (req, res) => {
-  try {
-    const date = req.query.date || new Date().toISOString().split('T')[0];
-    const revenue = await dbGet('SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE DATE(created_at) = ?', [date]);
-    const sessions = await dbAll('SELECT COUNT(*) as count FROM sessions WHERE DATE(start_time) = ?', [date]);
-    const activeCustomers = await dbAll('SELECT COUNT(DISTINCT customer_id) as count FROM sessions WHERE DATE(start_time) = ?', [date]);
-    res.json({ date, revenue: revenue.total, session_count: sessions[0].count, unique_customers: activeCustomers[0].count });
-  } catch (err) {
-    logger.error('Daily report error', err.message);
-    res.status(500).json({ error: err.message });
-  }
+router.get('/daily', async (req, res) => {
+    try {
+        const dateStr = req.query.date || new Date().toISOString().split('T')[0];
+        const start = new Date(dateStr);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 1);
+
+        const [revenue, sessions, uniqueCustomers] = await Promise.all([
+            Payment.aggregate([
+                { $match: { createdAt: { $gte: start, $lt: end } } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]),
+            Session.countDocuments({ startTime: { $gte: start, $lt: end } }),
+            Session.distinct('customerId', { startTime: { $gte: start, $lt: end } })
+        ]);
+
+        res.json({
+            date: dateStr,
+            revenue: revenue[0]?.total || 0,
+            session_count: sessions,
+            unique_customers: uniqueCustomers.length
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-router.get('/weekly', authenticate, async (req, res) => {
-  try {
-    const now = new Date();
-    const dayOfWeek = now.getDay();
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() - dayOfWeek);
-    startOfWeek.setHours(0, 0, 0, 0);
-    const endOfWeek = new Date(startOfWeek);
-    endOfWeek.setDate(startOfWeek.getDate() + 7);
+router.get('/weekly', async (req, res) => {
+    try {
+        const now = new Date();
+        const dayOfWeek = now.getDay();
+        const start = new Date(now);
+        start.setDate(now.getDate() - dayOfWeek);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(start);
+        end.setDate(start.getDate() + 7);
 
-    const startStr = startOfWeek.toISOString().split('T')[0];
-    const endStr = endOfWeek.toISOString().split('T')[0];
+        const [revenue, sessions, dailyBreakdown] = await Promise.all([
+            Payment.aggregate([
+                { $match: { createdAt: { $gte: start, $lt: end } } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]),
+            Session.countDocuments({ startTime: { $gte: start, $lt: end } }),
+            Payment.aggregate([
+                { $match: { createdAt: { $gte: start, $lt: end } } },
+                { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, daily_total: { $sum: '$amount' } } },
+                { $sort: { _id: 1 } }
+            ])
+        ]);
 
-    const revenue = await dbGet('SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE created_at >= ? AND created_at < ?', [startStr, endStr]);
-    const sessions = await dbAll('SELECT COUNT(*) as count FROM sessions WHERE start_time >= ? AND start_time < ?', [startStr, endStr]);
-    const payments = await dbAll('SELECT DATE(created_at) as date, COALESCE(SUM(amount), 0) as daily_total FROM payments WHERE created_at >= ? AND created_at < ? GROUP BY DATE(created_at)', [startStr, endStr]);
-    res.json({ week_start: startStr, week_end: endStr, revenue: revenue.total, session_count: sessions[0].count, daily_breakdown: payments });
-  } catch (err) {
-    logger.error('Weekly report error', err.message);
-    res.status(500).json({ error: err.message });
-  }
+        res.json({
+            week_start: start.toISOString().split('T')[0],
+            week_end: end.toISOString().split('T')[0],
+            revenue: revenue[0]?.total || 0,
+            session_count: sessions,
+            daily_breakdown: dailyBreakdown
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-router.get('/monthly', authenticate, async (req, res) => {
-  try {
-    const month = parseInt(req.query.month) || new Date().getMonth() + 1;
-    const year = parseInt(req.query.year) || new Date().getFullYear();
-    const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-    const endMonth = month === 12 ? 1 : month + 1;
-    const endYear = month === 12 ? year + 1 : year;
-    const endDate = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
+router.get('/monthly', async (req, res) => {
+    try {
+        const month = parseInt(req.query.month) || new Date().getMonth() + 1;
+        const year = parseInt(req.query.year) || new Date().getFullYear();
+        const start = new Date(year, month - 1, 1);
+        const end = new Date(month === 12 ? year + 1 : year, month === 12 ? 0 : month, 1);
 
-    const revenue = await dbGet('SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE created_at >= ? AND created_at < ?', [startDate, endDate]);
-    const sessions = await dbAll('SELECT COUNT(*) as count FROM sessions WHERE start_time >= ? AND start_time < ?', [startDate, endDate]);
-    const dailyPayments = await dbAll('SELECT DATE(created_at) as date, COALESCE(SUM(amount), 0) as daily_total FROM payments WHERE created_at >= ? AND created_at < ? GROUP BY DATE(created_at) ORDER BY date LIMIT 31', [startDate, endDate]);
-    res.json({ month, year, revenue: revenue.total, session_count: sessions[0].count, daily_breakdown: dailyPayments });
-  } catch (err) {
-    logger.error('Monthly report error', err.message);
-    res.status(500).json({ error: err.message });
-  }
+        const [revenue, sessions, dailyBreakdown] = await Promise.all([
+            Payment.aggregate([
+                { $match: { createdAt: { $gte: start, $lt: end } } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]),
+            Session.countDocuments({ startTime: { $gte: start, $lt: end } }),
+            Payment.aggregate([
+                { $match: { createdAt: { $gte: start, $lt: end } } },
+                { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, daily_total: { $sum: '$amount' } } },
+                { $sort: { _id: 1 } },
+                { $limit: 31 }
+            ])
+        ]);
+
+        res.json({ month, year, revenue: revenue[0]?.total || 0, session_count: sessions, daily_breakdown: dailyBreakdown });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-router.get('/utilization', authenticate, async (req, res) => {
-  try {
-    const totalPCs = await dbGet('SELECT COUNT(*) as count FROM pcs');
-    const activePCs = await dbGet('SELECT COUNT(*) as count FROM pcs WHERE status = "in-use"');
-    const offlinePCs = await dbGet('SELECT COUNT(*) as count FROM pcs WHERE status = "offline"');
-    const onlinePCs = await dbGet('SELECT COUNT(*) as count FROM pcs WHERE status = "online"');
-    const activeSessions = await dbGet('SELECT COUNT(*) as count FROM sessions WHERE status = "active"');
-    const avgDuration = await dbGet('SELECT COALESCE(AVG(duration_mins), 0) as avg FROM sessions WHERE status = "completed" AND DATE(start_time) = DATE("now")');
-    res.json({ total: totalPCs.count, in_use: activePCs.count, offline: offlinePCs.count, online: onlinePCs.count, active_sessions: activeSessions.count, avg_session_duration: Math.round(avgDuration.avg) });
-  } catch (err) {
-    logger.error('Utilization report error', err.message);
-    res.status(500).json({ error: err.message });
-  }
+router.get('/utilization', async (req, res) => {
+    try {
+        const [total, inUse, offline, activeSessions, avgDuration] = await Promise.all([
+            PC.countDocuments(),
+            PC.countDocuments({ status: 'in-use' }),
+            PC.countDocuments({ status: 'offline' }),
+            Session.countDocuments({ status: 'active' }),
+            Session.aggregate([
+                {
+                    $match: {
+                        status: 'ended',
+                        startTime: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }
+                    }
+                },
+                {
+                    $project: { durationMs: { $subtract: ['$endTime', '$startTime'] } }
+                },
+                { $group: { _id: null, avg: { $avg: '$durationMs' } } }
+            ])
+        ]);
+
+        res.json({
+            total,
+            in_use: inUse,
+            offline,
+            active_sessions: activeSessions,
+            avg_session_duration: Math.round((avgDuration[0]?.avg || 0) / 60000)
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 module.exports = router;
