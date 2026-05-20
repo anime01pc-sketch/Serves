@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const xss = require('xss');
 const Admin = require('../models/Admin');
+const { authenticate } = require('../middleware/auth');
 const router = express.Router();
 
 // --------------------------------
@@ -98,6 +99,17 @@ router.post('/register', registerValidation, async (req, res) => {
         res.json({ message: 'Admin created successfully', id: admin._id });
     } catch (err) {
         console.error('Register error:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+router.get('/verify', authenticate, async (req, res) => {
+    try {
+        const admin = await Admin.findById(req.user.id).select('-password');
+        if (!admin) return res.status(404).json({ error: 'Admin not found' });
+        res.status(200).json({ valid: true, user: { id: admin._id, username: admin.username } });
+    } catch (err) {
+        console.error('Verify error:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
