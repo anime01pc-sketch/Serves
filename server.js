@@ -186,9 +186,36 @@ app.get('/api/health', (req, res) => {
 });
 
 const { initSockets } = require('./sockets/sessionSocket');
-initSockets(io);
+const Admin = require('./models/Admin');
+const { hashPassword } = require('./utils/helpers');
 
-connectDB().then(() => {
+async function bootstrapSuperAdmin() {
+    const adminUsername = process.env.ADMIN_USERNAME;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+
+    if (!adminUsername || !adminPassword) {
+        console.log('  ⚠️  No ADMIN_USERNAME/ADMIN_PASSWORD in environment');
+        return;
+    }
+
+    const existingAdmin = await Admin.findOne({ username: adminUsername.toLowerCase() });
+    if (existingAdmin) {
+        console.log(`  ✅ Super admin "${adminUsername}" already exists`);
+        return;
+    }
+
+    const superAdmin = await Admin.create({
+        username: adminUsername.toLowerCase(),
+        password: adminPassword,
+        role: 'superadmin',
+        isSuperAdmin: true
+    });
+
+    console.log(`  ✅ Super admin "${adminUsername}" created from environment`);
+}
+
+connectDB().then(async () => {
+    await bootstrapSuperAdmin();
     const PORT = process.env.PORT || 3001;
     server.listen(PORT, '0.0.0.0', () => {
         console.log(`\n  🌟 Pleiades Cafe Server`);

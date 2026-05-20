@@ -76,12 +76,20 @@ router.post('/login', loginValidation, async (req, res) => {
         if (!match) return res.status(401).json({ error: 'Invalid credentials' });
 
         const token = jwt.sign(
-            { id: admin._id, username: admin.username },
+            { id: admin._id, username: admin.username, role: admin.role },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
         
-        res.json({ token, user: { id: admin._id, username: admin.username } });
+        res.json({ 
+            token, 
+            user: { 
+                id: admin._id, 
+                username: admin.username,
+                role: admin.role,
+                isSuperAdmin: admin.isSuperAdmin || false
+            } 
+        });
     } catch (err) {
         console.error('Auth error:', err);
         res.status(500).json({ error: 'Server error' });
@@ -107,9 +115,42 @@ router.get('/verify', authenticate, async (req, res) => {
     try {
         const admin = await Admin.findById(req.user.id).select('-password');
         if (!admin) return res.status(404).json({ error: 'Admin not found' });
-        res.status(200).json({ valid: true, user: { id: admin._id, username: admin.username } });
+        res.status(200).json({ valid: true, user: { id: admin._id, username: admin.username, role: admin.role, isSuperAdmin: admin.isSuperAdmin || false } });
     } catch (err) {
         console.error('Verify error:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+router.get('/admins', authenticate, async (req, res) => {
+    try {
+        const currentAdmin = await Admin.findById(req.user.id);
+        if (!currentAdmin.isSuperAdmin) return res.status(403).json({ error: 'Super admin access required' });
+        
+        const admins = await Admin.find().select('-password').sort({ createdAt: -1 });
+        res.json(admins);
+    } catch (err) {
+        console.error('Get admins error:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+router.delete('/admins/:id', authenticate, async (req, res) => {
+    try {
+        const currentAdmin = await Admin.findById(req.user.id);
+        if (!currentAdmin.isSuperAdmin) return res.status(403).json({ error: 'Super admin access required' });
+        
+        if (req.params.id === req.user.id) return res.status(400).json({ error: 'Cannot delete yourself' });
+        
+        const admin = await Admin.findById(req.params.id);
+        if (!admin) return res.status(404).json({ error: 'Admin not found' });
+        
+        if (admin.isSuperAdmin) return res.status(400).json({ error: 'Cannot delete super admin' });
+        
+        await Admin.findByIdAndDelete(req.params.id);
+        res.json({ message: 'Admin deleted successfully' });
+    } catch (err) {
+        console.error('Delete admin error:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
