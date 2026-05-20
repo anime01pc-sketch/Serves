@@ -1,6 +1,5 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const db = require('../config/database');
 const logger = require('./logger');
 
 function hashPassword(password) {
@@ -61,34 +60,6 @@ function now() {
   return new Date().toISOString();
 }
 
-// Promisified db operations
-function dbGet(query, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(query, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
-}
-
-function dbAll(query, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(query, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
-}
-
-function dbRun(query, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(query, params, function (err) {
-      if (err) reject(err);
-      else resolve({ lastID: this.lastID, changes: this.changes });
-    });
-  });
-}
-
 module.exports = {
   hashPassword,
   comparePassword,
@@ -99,7 +70,4 @@ module.exports = {
   formatDateTime,
   today,
   now,
-  dbGet,
-  dbAll,
-  dbRun,
 };
