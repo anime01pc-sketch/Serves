@@ -1,9 +1,4 @@
+workdir/
+.opencode/
 node_modules/
-.env
-*.db
-logs/
-uploads/
-.DS_Store
-*.log
-server.log
-package-lock.json
+data/
