@@ -19,6 +19,9 @@ const pcsRoutes = require('./routes/pcs.routes');
 const setupSocketHandlers = require('./sockets/socketHandlers');
 const { auditLogger } = require('./middleware/audit');
 
+const { SessionManager } = require('./services/sessionManager');
+const { authMiddleware, accountCheck } = require('./middleware/auth');
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -97,6 +100,41 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// ── Session Status (for app reconnect) ──────────────────────────────────────────
+
+app.get('/api/pcs/:pcId/session/status', authMiddleware, accountCheck, async (req, res) => {
+  try {
+    const { pcId } = req.params;
+    const pc = await db.get('pcs', p => p.id === pcId);
+    if (!pc) return res.status(404).json({ error: 'PC not found' });
+    const { canManageGroup } = require('./middleware/permissions');
+    if (!await canManageGroup(req.user.id, pc.group_id)) return res.status(403).json({ error: 'Forbidden' });
+
+    const now = Math.floor(Date.now() / 1000);
+    let sessionType = null;
+    let remainingSeconds = 0;
+
+    if (pc.stopwatch_start > 0) {
+      sessionType = 'free';
+      remainingSeconds = now - pc.stopwatch_start;
+    } else if (pc.session_end > now) {
+      sessionType = 'paid';
+      remainingSeconds = pc.session_end - now;
+    }
+
+    res.json({
+      pc_id: pc.id,
+      session_type: sessionType,
+      remaining_seconds: remainingSeconds,
+      session_end: pc.session_end,
+      stopwatch_start: pc.stopwatch_start,
+      is_online: pc.is_online === 1 || pc.is_online === true,
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── 404 Handler ────────────────────────────────────────────────────────────────
 
 app.use((req, res) => {
@@ -165,6 +203,12 @@ db._ready.then(async () => {
   await loadRateCache();
   global.getCachedRate = getCachedRate;
   global.setCachedRate = setCachedRate;
+
+  // Start Session Manager
+  const sessionManager = new SessionManager(io);
+  sessionManager.start();
+  global.sessionManager = sessionManager;
+
   server.listen(PORT, () => {
     console.log(`\nGameZone Server running on port ${PORT}`);
     console.log(`   Mode: ${process.env.MONGODB_URI ? 'MongoDB (cloud)' : 'Local JSON file'}`);
