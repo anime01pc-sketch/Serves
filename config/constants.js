@@ -25,7 +25,7 @@ if (!ADMIN_SECRET) {
 
 const CORS_ORIGINS = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',').map(o => o.trim())
-  : ['http://localhost:3000'];
+  : ['http://localhost:3000', 'https://pleiades-web.vercel.app'];
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
